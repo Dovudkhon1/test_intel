@@ -1,29 +1,53 @@
 import torch
 import soundfile as sf
-from transformers import pipeline
+
+# Enable Gaudi optimizations BEFORE loading models
 from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
+adapt_transformers_to_gaudi()
 
-def main():
-    adapt_transformers_to_gaudi()
-    
-    # Load audio into memory as a numpy array using soundfile
-    audio_data, samplerate = sf.read("en_male_sample.wav")
-    
-    # Whisper expects 16000Hz mono. Convert if necessary.
-    if samplerate != 16000:
-        import librosa
-        audio_data = librosa.resample(audio_data, orig_sr=samplerate, target_sr=16000)
+from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 
-    pipe = pipeline(
-        "automatic-speech-recognition",
-        model="openai/whisper-medium",
-        device="hpu",
-        torch_dtype=torch.bfloat16
+AUDIO_FILE = "en_male.wav"
+MODEL_NAME = "openai/whisper-medium"
+
+# Load audio (must be 16kHz mono)
+audio, sr = sf.read(AUDIO_FILE)
+if sr != 16000:
+    raise ValueError("Audio must be 16kHz")
+
+# Load processor & model
+processor = AutoProcessor.from_pretrained(MODEL_NAME)
+model = AutoModelForSpeechSeq2Seq.from_pretrained(
+    MODEL_NAME,
+    torch_dtype=torch.bfloat16,
+    low_cpu_mem_usage=True,
+).to("hpu")
+
+model.eval()
+
+# Preprocess
+inputs = processor(
+    audio,
+    sampling_rate=16000,
+    return_tensors="pt",
+)
+
+input_features = inputs.input_features.to("hpu")
+
+# Force English transcription
+forced_decoder_ids = processor.get_decoder_prompt_ids(
+    language="english",
+    task="transcribe"
+)
+
+# Inference
+with torch.no_grad(), torch.autocast(device_type="hpu", dtype=torch.bfloat16):
+    predicted_ids = model.generate(
+        input_features,
+        forced_decoder_ids=forced_decoder_ids,
+        max_new_tokens=256,
     )
 
-    # Pass the array directly instead of the filename
-    result = pipe(audio_data) 
-    print(result["text"])
-
-if __name__ == "__main__":
-    main()
+# Decode
+text = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
+print("\nTranscription:\n", text)
