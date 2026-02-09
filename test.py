@@ -1,30 +1,42 @@
 import torch
-import soundfile as sf
+import time
+import habana_frameworks.torch.core as htcore
 from transformers import pipeline
 from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
 def main():
+    # 1. Adapt transformers for Intel Gaudi HPU
     adapt_transformers_to_gaudi()
     
-    # Load audio into memory as a numpy array using soundfile
-    audio_data, samplerate = sf.read("en_male.wav")
+    # 2. Configure device and model
+    # We use 'medium' for a balance of speed and accuracy on a single HPU
+    model_id = "openai/whisper-medium"
+    device = "hpu"
     
-    # Whisper expects 16000Hz mono. Convert if necessary.
-    if samplerate != 16000:
-        import librosa
-        audio_data = librosa.resample(audio_data, orig_sr=samplerate, target_sr=16000)
-
+    print(f"Loading {model_id} onto {device}...")
     pipe = pipeline(
         "automatic-speech-recognition",
-        model="openai/whisper-medium",
-        device="hpu",
-        torch_dtype=torch.bfloat16
+        model=model_id,
+        device=device,
+        torch_dtype=torch.bfloat16 # Optimized for Gaudi 2
     )
 
-    # Pass the array directly instead of the filename
-    result = pipe(audio_data) 
+    # 3. Transcribe audio
+    audio_file = "en_male_sample.wav"
+    print(f"Transcribing {audio_file}...")
+    
+    start_time = time.time()
+    result = pipe(audio_file, generate_kwargs={"language": "english"})
+    
+    # Synchronize to get accurate timing on HPU
+    torch.hpu.synchronize() 
+    end_time = time.time()
+
+    print("\n" + "="*20)
+    print("TRANSCRIPTION:")
     print(result["text"])
+    print("="*20)
+    print(f"Inference Time: {end_time - start_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
-
