@@ -1,73 +1,42 @@
-import argparse
-import time
 import torch
-import soundfile as sf
-
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-
-
-def load_audio(path):
-    audio, sr = sf.read(path)
-    if audio.ndim > 1:  # stereo → mono
-        audio = audio.mean(axis=1)
-    return audio, sr
-
+import time
+import habana_frameworks.torch.core as htcore
+from transformers import pipeline
+from optimum.habana.transformers.modeling_utils import adapt_transformers_to_gaudi
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("audio_path", type=str, help="Path to .wav audio file")
-    args = parser.parse_args()
-
-    # --- Fixed configuration ---
-    MODEL_ID = "openai/whisper-medium"
-    LANGUAGE = "en"
-    TASK = "transcribe"
-    MAX_NEW_TOKENS = 256
-
-    # --- Sanity check ---
-    if not torch.hpu.is_available():
-        raise RuntimeError("HPU not available. Check Habana / SynapseAI setup.")
-
-    device = torch.device("hpu")
-
-    print("Loading Whisper processor and model...")
-    processor = WhisperProcessor.from_pretrained(MODEL_ID)
-    model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID)
-
-    # Force English transcription
-    model.config.forced_decoder_ids = processor.get_decoder_prompt_ids(
-        language=LANGUAGE,
-        task=TASK
+    # 1. Adapt transformers for Intel Gaudi HPU
+    adapt_transformers_to_gaudi()
+    
+    # 2. Configure device and model
+    # We use 'medium' for a balance of speed and accuracy on a single HPU
+    model_id = "openai/whisper-medium"
+    device = "hpu"
+    
+    print(f"Loading {model_id} onto {device}...")
+    pipe = pipeline(
+        "automatic-speech-recognition",
+        model=model_id,
+        device=device,
+        torch_dtype=torch.bfloat16 # Optimized for Gaudi 2
     )
 
-    model.to(device)
-    model.eval()
+    # 3. Transcribe audio
+    audio_file = "en_male_sample.wav"
+    print(f"Transcribing {audio_file}...")
+    
+    start_time = time.time()
+    result = pipe(audio_file, generate_kwargs={"language": "english"})
+    
+    # Synchronize to get accurate timing on HPU
+    torch.hpu.synchronize() 
+    end_time = time.time()
 
-    # --- Load audio ---
-    audio, sr = load_audio(args.audio_path)
-    inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
-    input_features = inputs.input_features.to(device)
-
-    # --- Inference ---
-    print("Running inference on HPU...")
-    with torch.inference_mode():
-        start = time.time()
-        predicted_ids = model.generate(
-            input_features,
-            max_new_tokens=MAX_NEW_TOKENS
-        )
-        torch.hpu.synchronize()
-        end = time.time()
-
-    text = processor.batch_decode(
-        predicted_ids,
-        skip_special_tokens=True
-    )[0]
-
-    print("\n=== TRANSCRIPTION ===")
-    print(text)
-    print(f"\nInference time: {end - start:.3f}s")
-
+    print("\n" + "="*20)
+    print("TRANSCRIPTION:")
+    print(result["text"])
+    print("="*20)
+    print(f"Inference Time: {end_time - start_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
