@@ -7,7 +7,7 @@ def main():
     adapt_transformers_to_gaudi()
     
     # Load audio into memory as a numpy array using soundfile
-    audio_data, samplerate = sf.read("en_male_sample.wav")
+    audio_data, samplerate = sf.read("en_male.wav")
     
     # Whisper expects 16000Hz mono. Convert if necessary.
     if samplerate != 16000:
@@ -27,3 +27,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
