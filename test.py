@@ -22,7 +22,7 @@ def main():
     )
 
     # 3. Transcribe audio
-    audio_file = "en_male_sample.wav"
+    audio_file = "en_male.wav"
     print(f"Transcribing {audio_file}...")
     
     start_time = time.time()
@@ -40,3 +40,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
